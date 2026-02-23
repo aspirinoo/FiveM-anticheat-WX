@@ -1,0 +1,164 @@
+-- Check if HeartBeat feature is enabled in config
+if not wx or not wx.HeartBeat or not wx.HeartBeat.enabled then
+  return
+end
+
+local heartbeatTimestamps = {}
+local heartbeatRetryCount = {}
+local lastHeartbeatKeys = {}
+local lastHeartbeatHashes = {}
+local locale = LoadLocale() or {}
+
+-- Remove player from heartbeat tracking on disconnect
+AddEventHandler("playerDropped", function()
+  heartbeatTimestamps[source] = nil
+  heartbeatRetryCount[source] = nil
+  lastHeartbeatKeys[source] = nil
+  lastHeartbeatHashes[source] = nil
+end)
+
+-- Helper: Convert number to base62 string
+local function toBase62(num)
+  local charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+  local base = #charset
+  local result = ""
+  repeat
+    local remainder = (num % base) + 1
+    result = charset:sub(remainder, remainder) .. result
+    num = math.floor(num / base)
+  until num == 0
+  return result
+end
+
+-- Helper: Compute a hash from two strings
+local function computeHash(str1, str2)
+  local hash = 0
+  for i = 1, #str1 do
+    local c1 = str1:byte(i)
+    local c2 = str2:byte(((i - 1) % #str2) + 1)
+    hash = (hash * 31 + c1 + c2) % 1000000007
+  end
+  return toBase62(hash)
+end
+
+-- Verify if a given hash matches expected hash for a string and key
+local function verifyHash(str, expectedHash, key)
+  local cleanedStr = str:gsub(" ", "")
+  return computeHash(cleanedStr, key) == expectedHash
+end
+
+-- Get max length of strings in a table
+local function getMaxValue(tbl)
+  local maxLen = 0
+  for _, v in pairs(tbl) do
+    if #v > maxLen then
+      maxLen = #v
+    end
+  end
+  return maxLen
+end
+
+-- Handle heartbeat key request from client
+RegisterNetEvent("wx_anticheat:heartbeat:requestKey", function()
+  local src = source
+  if lastHeartbeatKeys[src] or lastHeartbeatHashes[src] then
+    -- Player already has a key, possible exploit
+    BetterPrint(string.format("Player [%s] %s tried to fake a heartbeat signal. (Requested key again)", src, GetPlayerName(src) or "Unknown"), "info")
+    BanPlayer(src, locale.FakeHeartbeat)
+    return
+  end
+
+  local playerName = GetPlayerName(src) or "Unknown"
+  local seed = os.time() * 5.8652378556237765E7 * 263857532678 * 657283 * math.pi * math.rad(os.time())
+  local key = toBase62(math.floor(seed))
+  local hash = computeHash(playerName:gsub(" ", ""), key)
+
+  TriggerClientEvent("wx_anticheat:heartbeat:sendKey", src, hash)
+
+  lastHeartbeatKeys[src] = hash
+  lastHeartbeatHashes[src] = key
+  heartbeatRetryCount[src] = 0
+end)
+
+-- Verify heartbeat key sent by client
+RegisterNetEvent("wx_anticheat:heartbeat:send", function(keyData, startIndex)
+  local src = source
+  local expectedKey = lastHeartbeatKeys[src]
+  if not expectedKey then return end
+
+  -- Convert keyData (array of bytes) to string
+  local keyStr = ""
+  for i = 1, #keyData do
+    keyStr = keyStr .. string.char(keyData[i])
+  end
+
+  -- Validate key length and content
+  local maxLen = 35 + getMaxValue(lastHeartbeatKeys)
+  if #keyStr < 15 or #keyStr > maxLen or not keyStr:find(expectedKey) then
+    BetterPrint(string.format("Player [%s] %s tried to fake a heartbeat signal. (Invalid Key)", src, GetPlayerName(src) or "Unknown"), "info")
+    BanPlayer(src, locale.FakeHeartbeat)
+    return
+  end
+
+  -- Verify hash correctness
+  if not verifyHash(GetPlayerName(src) or "", expectedKey, lastHeartbeatHashes[src]) then
+    BetterPrint(string.format("Player [%s] %s tried to fake a heartbeat signal. (Invalid Hash)", src, GetPlayerName(src) or "Unknown"), "info")
+    BanPlayer(src, locale.FakeHeartbeat)
+    return
+  end
+
+  -- Verify key position in string
+  local extractedKey = keyStr:sub(startIndex + 1, startIndex + #expectedKey)
+  if extractedKey ~= expectedKey then
+    BetterPrint(string.format("Player [%s] %s tried to fake a heartbeat signal. (Invalid Hash position)", src, GetPlayerName(src) or "Unknown"), "info")
+    BanPlayer(src, locale.FakeHeartbeat)
+    return
+  end
+
+  -- Check for duplicate keys
+  if heartbeatTimestamps[keyStr] then
+    BetterPrint(string.format("Player [%s] %s tried to fake a heartbeat signal. (Duplicate Key)", src, GetPlayerName(src) or "Unknown"), "info")
+    BanPlayer(src, locale.FakeHeartbeat)
+    return
+  end
+
+  if wx.Debug then
+    BetterPrint(string.format("✅ Received heartbeat from [%s] %s", src, GetPlayerName(src) or "Unknown"), "debug")
+  end
+
+  heartbeatTimestamps[keyStr] = true
+  heartbeatTimestamps[src] = os.time()
+end)
+
+-- Periodic check for missing heartbeats
+Citizen.CreateThread(function()
+  while true do
+    Citizen.Wait(5000)
+    for playerId, lastTime in pairs(heartbeatTimestamps) do
+      if wx.AdminStatus(playerId) then
+        if lastTime then
+          local elapsed = os.time() - lastTime
+          if elapsed >= wx.HeartBeat.maxTime then
+            heartbeatRetryCount[playerId] = (heartbeatRetryCount[playerId] or 0) + 1
+            BetterPrint(string.format(
+              "Player [%s] %s didn't send any heartbeat to the server in required time. Last response: %s seconds ago. Waiting longer for response (%s/3)",
+              playerId, GetPlayerName(playerId) or "Unknown", elapsed, heartbeatRetryCount[playerId]
+            ), "info")
+
+            if heartbeatRetryCount[playerId] > 2 then
+              BetterPrint(string.format(
+                "Player [%s] %s didn't send any heartbeat to the server in required time. Retry attempts: %s",
+                playerId, GetPlayerName(playerId) or "Unknown", heartbeatRetryCount[playerId]
+              ), "info")
+              DropPlayer(playerId, "[ac.wx0.dev] " .. locale.HeartbeatDisconnected)
+              heartbeatTimestamps[playerId] = nil
+              lastHeartbeatKeys[playerId] = nil
+              lastHeartbeatHashes[playerId] = nil
+              heartbeatRetryCount[playerId] = nil
+            end
+          end
+        end
+      end
+    end
+  end
+end)

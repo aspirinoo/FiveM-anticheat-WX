@@ -1,0 +1,73 @@
+-- Exported function to ban a player
+exports("ban", function(playerId, reason)
+  local invokingResource = GetInvokingResource()
+  local currentResource = GetCurrentResourceName()
+
+  if invokingResource ~= currentResource then
+    BetterPrint(
+      string.format(
+        "Resource %s banned player [%s] %s: '%s' using export",
+        invokingResource,
+        playerId,
+        GetPlayerName(playerId),
+        reason
+      ),
+      "info"
+    )
+  end
+
+  Ban(playerId, reason, nil, string.format("Banned via Export: `%s`", invokingResource))
+end)
+
+-- Exported function to unban a player by ban ID
+exports("unban", function(banId)
+  MySQL.Async.fetchAll("SELECT * FROM `wx_anticheat` WHERE `banID` = @banID", {["@banID"] = banId}, function(result)
+    if result and result[1] then
+      local banInfo = result[1]
+      SendLog(
+        string.format("🔱 Player has been unbanned - [%s]", banId),
+        {
+          fields = {
+            { name = "Player Name", value = banInfo.playerName, inline = true },
+            { name = "Ban Reason", value = banInfo.reason, inline = true },
+            { name = "Discord ID", value = banInfo.discordid, inline = true }
+          }
+        },
+        Webhooks.AdminMenuLogs
+      )
+      TriggerEvent("wx_anticheat:playerUnbanned", banId)
+      CachedUnban(banId)
+    end
+  end)
+
+  MySQL.Async.execute("DELETE FROM wx_anticheat WHERE banID = @banID", { banID = banId }, function(affectedRows)
+    if affectedRows == 0 then
+      -- No rows affected, possibly log or handle
+    end
+  end)
+end)
+
+-- Exported function to get admin type for a player
+exports("getAdminType", function(playerId)
+  return getAdminType(playerId)
+end)
+
+-- Exported function to get config or webhooks
+exports("getConfig", function(configType)
+  if not configType then
+    return wx
+  end
+
+  if configType == "webhooks" then
+    return Webhooks
+  else
+    BetterPrint(
+      string.format(
+        "Resource ^2%s^7 attempted to request invalid config type using 'getConfig' export.",
+        GetInvokingResource()
+      ),
+      "error"
+    )
+    return wx
+  end
+end)

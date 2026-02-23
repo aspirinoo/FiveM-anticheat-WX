@@ -1,0 +1,322 @@
+-- Command categories and their commands
+local commandCategories = {
+  {
+    title = "Administration",
+    commands = {
+      { cmd = "update", args = "", desc = "Checks for updates" },
+      { cmd = "banlist", args = "", desc = "Check how many players have been banned so far" },
+      { cmd = "help", args = "", desc = "Shows this help menu", optional = true },
+      { cmd = "report", args = "", desc = "Generates a report for troubleshooting with support", optional = true }
+    }
+  },
+  {
+    title = "Player Management",
+    commands = {
+      { cmd = "ban", args = "<id> (reason)", desc = "Bans specified player" },
+      { cmd = "baninfo", args = "<ban id>", desc = "Shows info about ban id" },
+      { cmd = "unban", args = "<ban id>", desc = "Unbans specified player" },
+      { cmd = "migrate", args = "", desc = "Migrates deprecated Ban IDs (#1234) to the new format" },
+      { cmd = "unbanAll", args = "", desc = "Removes all bans from the database (requires confirmation)" }
+    }
+  },
+  {
+    title = "Server Cleanup",
+    commands = {
+      { cmd = "clearvehicles", args = "", desc = "Clears every vehicle on the server" },
+      { cmd = "clearpeds", args = "", desc = "Clears every ped on the server" },
+      { cmd = "clearobjects", args = "", desc = "Clears every object on the server" },
+      { cmd = "clearall", args = "", desc = "Clears everything on the server" }
+    }
+  }
+}
+
+-- Generates the help menu text
+local function GenerateHelpMenu()
+  local lines = {}
+  table.insert(lines, "")
+  table.insert(lines, "  ^4WX ANTICHEAT HELP^7")
+  table.insert(lines, "")
+  table.insert(lines, "  ^2(optional argument)^7")
+  table.insert(lines, "  ^3<required argument>^7")
+  table.insert(lines, "")
+
+  for _, category in ipairs(commandCategories) do
+    table.insert(lines, string.format("  ^5%s^7", category.title))
+    table.insert(lines, "")
+    for _, cmd in ipairs(category.commands) do
+      local cmdText = string.format("  ^6wx^7 %s", cmd.cmd)
+      if cmd.args and cmd.args ~= "" then
+        if cmd.optional then
+          cmdText = string.format("%s ^2(%s)^7", cmdText, cmd.args)
+        else
+          local formattedArgs = cmd.args:gsub("<([^>]+)>", "^3<%1>^7")
+          cmdText = string.format("%s %s", cmdText, formattedArgs)
+        end
+      end
+      cmdText = string.format("%s - [^4%s^7]", cmdText, cmd.desc)
+      table.insert(lines, cmdText)
+    end
+    table.insert(lines, "")
+  end
+
+  return table.concat(lines, "\n")
+end
+
+-- Function to gather server info and save report files
+local function GenerateReport()
+  BetterPrint("Gathering server informations...", "info")
+
+  local serverInfo = {
+    hostname = GetConvar("sv_hostname", "No hostname set"),
+    projectName = GetConvar("sv_projectName", "No name set"),
+    projectDescription = GetConvar("sv_projectDesc", "No description set"),
+    maxPlayers = GetConvar("sv_maxClients", "48"),
+    gameBuild = GetConvar("sv_enforceGameBuild", "0"),
+    anticheatName = GetCurrentResourceName(),
+    anticheatVersion = GetResourceMetadata(GetCurrentResourceName(), "version", 0)
+  }
+
+  BetterPrint("Server information saved...", "info")
+  BetterPrint("Gathering resources...", "info")
+
+  local resources = {}
+  local resourceCount = GetNumResources()
+  for i = 0, resourceCount do
+    local resName = GetResourceByFindIndex(i)
+    if resName then
+      resources[resName] = GetResourceState(resName)
+    end
+  end
+
+  BetterPrint(string.format("Found %d resources", resourceCount), "info")
+
+  -- Save server info and config files
+  SaveResourceFile(GetCurrentResourceName(), "0 REPORT/data.json", json.encode(serverInfo, { indent = true, pretty = true }), -1)
+  SaveResourceFile(GetCurrentResourceName(), "0 REPORT/config.lua", LoadResourceFile(GetCurrentResourceName(), "configs/anticheat_config.lua"), -1)
+
+  -- Save resources list as JSON
+  local function sortedPairs(t)
+    local keys = {}
+    for k in pairs(t) do table.insert(keys, k) end
+    table.sort(keys)
+    local i = 0
+    return function()
+      i = i + 1
+      local key = keys[i]
+      if key then
+        return key, t[key]
+      end
+    end
+  end
+
+  local function encodeTable(t)
+    if type(t) ~= "table" then
+      return json.encode(t)
+    end
+    local result = "{\n"
+    local first = true
+    for k, v in sortedPairs(t) do
+      if not first then
+        result = result .. ",\n"
+      else
+        first = false
+      end
+      local valueStr = (type(v) == "table") and encodeTable(v) or json.encode(v)
+      result = result .. string.format("    %s: %s", json.encode(k), valueStr)
+    end
+    result = result .. "\n}"
+    return result
+  end
+
+  SaveResourceFile(GetCurrentResourceName(), "0 REPORT/resources.json", encodeTable(resources), -1)
+  BetterPrint("Data has been saved! You can find the report files in the \"0 REPORT\" folder with your AntiCheat files.", "success")
+end
+
+-- Generates a random ban ID string in format XXXX-XXXX
+local function GenerateBanID()
+  local charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+  local id = ""
+  for _ = 1, 8 do
+    local randIndex = math.random(#charset)
+    id = id .. charset:sub(randIndex, randIndex)
+  end
+  return id:sub(1,4) .. "-" .. id:sub(5)
+end
+
+-- Migrates deprecated ban IDs to new format
+local function MigrateBanIDs()
+  BetterPrint("Attempting to migrate ban IDs...", "info")
+  local bans = MySQL.Sync.fetchAll("SELECT * FROM wx_anticheat", {})
+  if bans then
+    local migratedCount = 0
+    local newIDs = {}
+    for _, ban in ipairs(bans) do
+      local banID = ban.banID
+      local playerName = ban.playerName
+      if banID:find("#") then
+        migratedCount = migratedCount + 1
+        local newID = GenerateBanID()
+        if newIDs[banID] then
+          newID = newIDs[banID] .. "-1"
+        end
+        newIDs[banID] = newID
+        MySQL.Async.execute("UPDATE wx_anticheat SET banID = @newBanID WHERE banID = @banID", {
+          ["@newBanID"] = newID,
+          ["@banID"] = banID
+        }, function(affectedRows)
+          if affectedRows ~= 0 then
+            BetterPrint(string.format("Migrated Ban ID %s (%s) to %s", banID, playerName, newID), "success")
+          else
+            BetterPrint(string.format("Failed to migrate Ban ID %s", banID), "error")
+          end
+        end)
+      end
+    end
+    if migratedCount == 0 then
+      BetterPrint("No ban IDs found to migrate", "info")
+    else
+      BetterPrint(string.format("Migrated %d Ban IDs", migratedCount), "success")
+    end
+  end
+end
+
+-- Command handlers
+local commandHandlers = {}
+local unbanAllConfirm = false
+
+function commandHandlers.ban(args)
+  local playerId = args[2]
+  local reason = table.concat(args, " ", 3)
+  local playerName = GetPlayerName(playerId)
+  if playerName then
+    exports[GetCurrentResourceName()].ban(tonumber(playerId), reason)
+  else
+    BetterPrint("Couldn't find the specified player ID", "error")
+  end
+end
+
+function commandHandlers.unban(args)
+  local banId = tostring(args[2])
+  TriggerEvent("wx_anticheat:unban", banId)
+end
+
+function commandHandlers.unbanAll()
+  if not unbanAllConfirm then
+    BetterPrint(string.format("Are you sure you want to unban all %d players? Type 'wx confirm' to confirm or 'wx cancel' to cancel.", #BanIds), "warning")
+    unbanAllConfirm = true
+  end
+end
+
+function commandHandlers.confirm()
+  if not unbanAllConfirm then
+    BetterPrint("Nothing to confirm", "error")
+    return
+  end
+  local success = MySQL.rawExecute.await("DELETE FROM `wx_anticheat`")
+  if success then
+    BetterPrint("All players have been unbanned", "success")
+    CachedUnban(-1)
+    unbanAllConfirm = false
+  end
+  unbanAllConfirm = false
+end
+
+function commandHandlers.decline()
+  if not unbanAllConfirm then
+    BetterPrint("Nothing to decline", "error")
+    return
+  end
+  BetterPrint("No players have been unbanned", "error")
+  unbanAllConfirm = false
+end
+
+function commandHandlers.baninfo(args)
+  local banId = tostring(args[2])
+  if not banId then
+    BetterPrint("Please specify the Ban ID", "error")
+    return
+  end
+  MySQL.Async.fetchAll("SELECT * FROM `wx_anticheat` WHERE `banID` = @banID", {["@banID"] = banId}, function(result)
+    local ban = result[1]
+    if not ban then
+      BetterPrint("Couldn't find the specified Ban ID", "error")
+      return
+    end
+    print(string.format(
+      "Info about %s:\n\n//\n[[ Player Name: %s\n[[ Ban Reason: %s\n[[ Discord ID: %s\n[[ License: %s\n[[ Steam: %s\n\\\\\n",
+      banId, ban.playerName, ban.reason, ban.discordid, ban.license, ban.steamid
+    ))
+  end)
+end
+
+function commandHandlers.clearvehicles()
+  for _, vehicle in pairs(GetAllVehicles()) do
+    DeleteEntity(vehicle)
+  end
+  BetterPrint("All vehicles have been deleted", "success")
+end
+
+function commandHandlers.clearpeds()
+  for _, ped in pairs(GetAllPeds()) do
+    DeleteEntity(ped)
+  end
+  BetterPrint("All peds have been deleted", "success")
+end
+
+function commandHandlers.clearobjects()
+  for _, object in pairs(GetAllObjects()) do
+    DeleteEntity(object)
+  end
+  BetterPrint("All objects have been deleted", "success")
+end
+
+function commandHandlers.clearall()
+  for _, object in pairs(GetAllObjects()) do
+    DeleteEntity(object)
+  end
+  for _, ped in pairs(GetAllPeds()) do
+    DeleteEntity(ped)
+  end
+  for _, vehicle in pairs(GetAllVehicles()) do
+    DeleteEntity(vehicle)
+  end
+  BetterPrint("All vehicles, peds and objects have been deleted", "success")
+end
+
+function commandHandlers.update()
+  CheckUpdates()
+end
+
+function commandHandlers.banlist()
+  BetterPrint(string.format("Banned cheaters so far: ^3%d^7", GetNumCheaters()), "info")
+end
+
+function commandHandlers.migrate()
+  MigrateBanIDs()
+end
+
+function commandHandlers.report()
+  GenerateReport()
+end
+
+function commandHandlers.help()
+  print(GenerateHelpMenu())
+end
+
+-- Command registration
+RegisterCommand("wx", function(source, args)
+  if source == 0 then -- Console
+    local cmd = tostring(args[1])
+    if cmd and commandHandlers[cmd] then
+      commandHandlers[cmd](args)
+    else
+      if cmd and cmd ~= "nil" then
+        BetterPrint(string.format("Invalid command: ^3\"%s\"^7. Please use ^3wx help^7 to see available commands.", cmd), "error")
+      else
+        BetterPrint("No command provided. Please use ^3wx help^7 to see available commands.", "error")
+      end
+    end
+  else
+    -- Player source, handle accordingly if needed
+  end
+end, false)

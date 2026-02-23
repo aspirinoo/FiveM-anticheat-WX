@@ -1,0 +1,31 @@
+local authenticatedAdmins = {}
+
+if wx.txAdminAuth then
+  RegisterNetEvent("txAdmin:events:adminAuth", function(data)
+    local netId = data.netid
+    local playerName = GetPlayerName(netId) or "Unknown"
+    local isAdmin = data.isAdmin
+
+    if isAdmin then
+      if not authenticatedAdmins[netId] then
+        authenticatedAdmins[netId] = true
+        local resourceExports = exports[GetCurrentResourceName()]
+        resourceExports:addAdmin(netId)
+        BetterPrint(
+          string.format("Admin [%s] %s (%s) authenticated via txAdmin!", netId, playerName, data.username),
+          "info"
+        )
+      end
+    else
+      if authenticatedAdmins[netId] then
+        authenticatedAdmins[netId] = nil
+        local resourceExports = exports[GetCurrentResourceName()]
+        resourceExports:removeAdmin(netId)
+        BetterPrint(
+          string.format("Admin [%s] %s (%s) removed from authentication.", netId, playerName, data.username),
+          "warning"
+        )
+      end
+    end
+  end)
+end

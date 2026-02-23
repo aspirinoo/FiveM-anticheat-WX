@@ -1,0 +1,146 @@
+local banner = [[
+    ^6.::    .   .:::.,::      .:    ^2  :::.       .,-:::::^7
+    ^6';;,  ;;  ;;;' `;;;,  .,;;     ^2  ;;`;;    ,;;;'````'^7
+    ^6 '[[, [[, [['    '[[,,[['      ^2 ,[[ '[[,  [[[^7
+    ^6   Y$c$$$c$P      Y$$$P        ^2c$$$cc$$$c $$$^7
+    ^6    "88"888     oP"``"Yo,      ^2 888   888,`88bo,__,o,^7
+    ^6     "M "M"  ,m"       "Mm,    ^2 YMM   ""`   "YUMMMMMP"^7
+
+
+    🔄  ⤤  ^4https://ac.wx0.dev^7
+    🔚  ⤤  ^5https://docs.wx0.dev^7
+    🔘  ⤤  ^6https://dsc.gg/wxscripts^7
+    🔒  ⤤  ^3https://0wx.tebex.io^7
+]]
+
+-- Split function: splits string A1_2 by delimiter A1_2
+function Split(str, delimiter)
+  local result = {}
+  local pattern = "(.-)" .. delimiter
+  for part in (str .. delimiter):gmatch(pattern) do
+    table.insert(result, part)
+  end
+  return result
+end
+
+-- CreateTextBlock function: splits a string into blocks of max length A0_2
+function CreateTextBlock(maxLength, text)
+  local blocks = {}
+  local words = Split(text, " ")
+  local currentBlock = ""
+  local firstWord = false
+
+  for _, word in ipairs(words) do
+    if #currentBlock >= maxLength then
+      table.insert(blocks, currentBlock)
+      currentBlock = ""
+      firstWord = false
+    end
+
+    if firstWord then
+      currentBlock = currentBlock .. " " .. word
+    else
+      currentBlock = currentBlock .. word
+      firstWord = true
+    end
+  end
+
+  if #currentBlock > 0 then
+    table.insert(blocks, currentBlock)
+  end
+
+  return blocks
+end
+
+-- Print banner on resource start
+CreateThread(function()
+  print(banner)
+end)
+
+-- CheckUpdates function: checks for updates asynchronously
+function CheckUpdates()
+  Citizen.CreateThread(function()
+    BetterPrint("Checking for updates...", "info")
+
+    local currentVersion = GetResourceMetadata(GetCurrentResourceName(), "version")
+    PerformHttpRequest("https://raw.githubusercontent.com/nwvh/wx_anticheatUpdate/main/version.json", function(statusCode, response)
+      if statusCode == 200 then
+        local data = json.decode(response)
+        if data.version ~= currentVersion then
+          print(string.format([[
+^6----------------------------------
+^6>^7 New version of WX AntiCheat has been released!
+^6>>^7 Your Version: ^1%s^7
+^6>>^7 Latest Version: ^2%s^7
+^6>>^7 Changelog: ^2
+]], currentVersion, data.version))
+          for _, change in pairs(data.changelog) do
+            print("^6 - ^2" .. change)
+          end
+          print([[
+^6> Download the latest update at ^2https://portal.cfx.re/
+^6----------------------------------^7
+]])
+        else
+          BetterPrint("You are running the latest version of WX AntiCheat!", "info")
+        end
+      else
+        BetterPrint("Update check failed.", "error")
+      end
+    end, "GET")
+  end)
+end
+
+-- Initial setup after 1 second delay
+Citizen.SetTimeout(1000, function()
+  if not wx then
+    BetterPrint("^1Your configuration file was not found - This issue might be caused by a syntax error in it. Please double check your configuration file and restart the anticheat!", "error")
+    StopResource(GetCurrentResourceName())
+    return
+  end
+
+  CheckUpdates()
+
+  if wx.Debug then
+    BetterPrint("Debug is turned on. AntiCheat will not work as intended, if you're not testing/debugging the anticheat, make sure to turn it off.", "warning")
+  end
+
+  BetterPrint(string.format("Loaded ^4%s^7 bans from the database", GetTableSize(BanIds)), "info")
+end)
+
+-- Periodic update check every 45 minutes
+Citizen.CreateThread(function()
+  while true do
+    Wait(2700000) -- 45 minutes
+    CheckUpdates()
+  end
+end)
+
+-- Export CheckUpdates function
+exports("checkUpdates", CheckUpdates)
+
+-- Database readiness check
+local databaseReady = true
+MySQL.ready(function()
+  local result = MySQL.query.await("SHOW TABLES LIKE 'wx_anticheat';")
+  if not result[1] then
+    databaseReady = false
+    BetterPrint('Database table "wx_anticheat" is missing. Please import the provided .sql file to your database.', "error")
+  end
+end)
+
+-- Player connecting event handler to check database readiness
+AddEventHandler("playerConnecting", function(name, setKickReason, deferrals)
+  if not databaseReady then
+    deferrals.defer()
+    while not databaseReady do
+      Wait(100)
+      ShowDef(deferrals, "Database Error", [[
+Database table "wx_anticheat" is missing.
+Please refer to the documentation before starting the AntiCheat.]], {
+        { title = "Documentation", url = "https://docs.wx0.dev/docs/anticheat/installation" }
+      })
+    end
+    deferrals.done()
+  end
+end)

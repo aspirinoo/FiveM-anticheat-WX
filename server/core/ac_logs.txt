@@ -1,0 +1,31 @@
+-- Sends a formatted log message to a specified webhook URL
+function SendLog(title, data, webhookUrl)
+  local embed = {
+    {
+      color = data.color or 13369599,
+      title = title,
+      author = {
+        name = "WX AntiCheat",
+        url = "https://0wx.tebex.io/",
+        icon_url = "https://tpr8otlvvv.ufs.sh/f/VNTtlh7BDT0xBTP0xosCXZyvGqAHknPwYI9DFSd7mWOe8Vxa"
+      },
+      description = data.description or "",
+      fields = data.fields,
+      thumbnail = {
+        url = "https://tpr8otlvvv.ufs.sh/f/VNTtlh7BDT0xBTP0xosCXZyvGqAHknPwYI9DFSd7mWOe8Vxa"
+      },
+      footer = {
+        text = "🔠 WX AntiCheat [ " .. os.date("%d.%m.%Y - %H:%M:%S") .. " ]",
+        icon_url = "https://tpr8otlvvv.ufs.sh/f/VNTtlh7BDT0xBTP0xosCXZyvGqAHknPwYI9DFSd7mWOe8Vxa"
+      }
+    }
+  }
+
+  local payload = json.encode({
+    username = Webhooks.Username,
+    avatar_url = Webhooks.AvatarURL,
+    embeds = embed
+  })
+
+  PerformHttpRequest(webhookUrl, function() end, "POST", payload, { ["Content-Type"] = "application/json" })
+end

@@ -1,0 +1,348 @@
+local L0_1, L1_1, L2_1, L3_1, L4_1, L5_1
+
+-- Check if AdminMenu is enabled
+if not wx.AdminMenu.enable then
+  return
+end
+
+-- BanPlayer function
+function BanPlayer(playerId, reason)
+  local resource = exports[GetCurrentResourceName()]
+  resource.ban(playerId, reason)
+end
+
+-- Assign AdminStatus function
+wx.AdminStatus = wx.AdminStatus
+
+-- Event: logAdminMenu
+RegisterNetEvent("wx_anticheat:logAdminMenu")
+AddEventHandler("wx_anticheat:logAdminMenu", function(action)
+  local isAdmin = wx.AdminStatus(source)
+  if not isAdmin then
+    return BanPlayer(source, "Admin Menu Exploit - [Not an Admin]")
+  end
+
+  local logData = {
+    action = action,
+    admin = GetPlayerName(source),
+    license = GetPlayerIdentifierByType(source, "license")
+  }
+
+  SendLog(
+    "🧱📝 Admin Menu",
+    {
+      fields = {
+        { name = "Admin Name", value = logData.admin, inline = true },
+        { name = "Admin License", value = logData.license, inline = true },
+        { name = "Action", value = logData.action, inline = true }
+      }
+    },
+    Webhooks.AdminMenuLogs
+  )
+end)
+
+-- Event: getPlayers
+RegisterNetEvent("wx_anticheat:getPlayers")
+AddEventHandler("wx_anticheat:getPlayers", function()
+  local playersList = {}
+  for _, playerId in pairs(GetPlayers()) do
+    local steamId = GetPlayerIdentifierByType(playerId, "steam") or "Not Found"
+    table.insert(playersList, {
+      id = playerId,
+      playerName = GetPlayerName(playerId),
+      steamId = steamId
+    })
+  end
+  TriggerClientEvent("wx_anticheat:syncPlayers", source, playersList)
+end)
+
+-- Event: GetPlayerIdentifiers
+RegisterNetEvent("wx_anticheat:GetPlayerIdentifiers")
+AddEventHandler("wx_anticheat:GetPlayerIdentifiers", function(playerId)
+  local identifiers = {}
+  local steam, license, ip, discord, fivem = "Not Found", "Not Found", "Not Found", "Not Found", "Not Found"
+
+  for _, id in pairs(GetPlayerIdentifiers(playerId)) do
+    if id:sub(1, 6) == "steam:" then
+      steam = id
+    elseif id:sub(1, 8) == "license:" then
+      license = id
+    elseif id:sub(1, 3) == "ip:" then
+      ip = id
+    elseif id:sub(1, 8) == "discord:" then
+      discord = id
+    elseif id:sub(1, 6) == "fivem:" then
+      fivem = id
+    end
+  end
+
+  table.insert(identifiers, {
+    steam = steam,
+    license = license,
+    ip = ip:gsub("ip:", ""),
+    discord = discord:gsub("discord:", ""),
+    fivem = fivem
+  })
+
+  TriggerClientEvent("wx_anticheat:syncIdentifiers", source, identifiers)
+end)
+
+-- Stats storage
+local stats = {
+  playerCount = 0,
+  adminCount = 0,
+  bannedCount = 0,
+  players = {}
+}
+local lastBannedCountUpdate = 0
+
+-- Event: fetchStats
+RegisterNetEvent("wx_anticheat:nui:fetchStats")
+AddEventHandler("wx_anticheat:nui:fetchStats", function()
+  local src = source
+  local playersData = {}
+  local adminCount = 0
+  local playerCount = GetNumPlayerIndices() or 0
+
+  for _, playerId in ipairs(GetPlayers()) do
+    local steamId = GetPlayerIdentifierByType(playerId, "steam") or "Not Found"
+    if wx.AdminStatus(tonumber(playerId)) then
+      adminCount = adminCount + 1
+    end
+    table.insert(playersData, {
+      id = playerId,
+      playerName = GetPlayerName(playerId),
+      steamId = steamId
+    })
+  end
+
+  stats.playerCount = playerCount
+  stats.adminCount = adminCount
+  stats.players = playersData
+
+  local currentTime = os.time()
+  if currentTime - lastBannedCountUpdate >= 60 then
+    lastBannedCountUpdate = currentTime
+    MySQL.Async.fetchScalar("SELECT COUNT(*) as count FROM wx_anticheat", {}, function(count)
+      stats.bannedCount = tonumber(count) or 0
+      TriggerClientEvent("wx_anticheat:nui:getStats", src, stats)
+    end)
+  else
+    TriggerClientEvent("wx_anticheat:nui:getStats", src, stats)
+  end
+end)
+
+-- Event: getPlayerCount
+RegisterNetEvent("wx_anticheat:getPlayerCount")
+AddEventHandler("wx_anticheat:getPlayerCount", function()
+  TriggerClientEvent("wx_anticheat:getPlayerCount", source, GetNumPlayerIndices())
+end)
+
+-- Logs storage
+local logs = {}
+
+-- Event: addLog
+RegisterNetEvent("wx_anticheat:addLog")
+AddEventHandler("wx_anticheat:addLog", function(sourceType, event, status)
+  if sourceType == "Admin" then
+    sourceType = string.format("Admin (%s)", GetPlayerName(source))
+  end
+
+  table.insert(logs, {
+    source = sourceType,
+    event = event,
+    status = status,
+    time = os.date("%H:%M")
+  })
+
+  TriggerClientEvent("wx_anticheat:syncLogs", source, logs)
+end)
+
+-- Event: clearLogs
+RegisterNetEvent("wx_anticheat:clearLogs")
+AddEventHandler("wx_anticheat:clearLogs", function()
+  if not wx.AdminStatus(source) then
+    return BanPlayer(source, "Admin Menu Exploit - [Not an Admin]")
+  end
+  logs = {}
+  TriggerClientEvent("wx_anticheat:syncLogs", source, logs)
+end)
+
+-- Event: getLogs
+RegisterNetEvent("wx_anticheat:getLogs")
+AddEventHandler("wx_anticheat:getLogs", function()
+  if not wx.AdminStatus(source) then
+    return BanPlayer(source, "Admin Menu Exploit - [Not an Admin]")
+  end
+  TriggerClientEvent("wx_anticheat:syncLogs", source, logs)
+end)
+
+-- Clear logs periodically
+CreateThread(function()
+  while true do
+    Wait(1200000) -- 20 minutes
+    logs = {}
+  end
+end)
+
+-- Event: getBanList
+RegisterNetEvent("wx_anticheat:getBanList")
+AddEventHandler("wx_anticheat:getBanList", function()
+  local src = source
+  MySQL.Async.fetchAll("SELECT banID, playerName, reason FROM wx_anticheat", {}, function(results)
+    if results then
+      local banList = {}
+      for _, ban in ipairs(results) do
+        table.insert(banList, {
+          banID = ban.banID,
+          playerName = ban.playerName,
+          reason = ban.reason
+        })
+      end
+      TriggerClientEvent("wx_anticheat:syncBans", src, banList)
+    else
+      print("Error retrieving ban data")
+    end
+  end)
+end)
+
+-- Event: getAdminCount
+RegisterNetEvent("wx_anticheat:getAdminCount")
+AddEventHandler("wx_anticheat:getAdminCount", function()
+  local adminCount = 0
+  for _, playerId in pairs(GetPlayers()) do
+    if wx.AdminStatus(tonumber(playerId)) then
+      adminCount = adminCount + 1
+    end
+  end
+  TriggerClientEvent("wx_anticheat:getAdminCount", source, adminCount)
+end)
+
+-- Event: deleteVehicles
+RegisterNetEvent("wx_anticheat:deleteVehicles")
+AddEventHandler("wx_anticheat:deleteVehicles", function()
+  if not wx.AdminStatus(source) then
+    return BanPlayer(source, "Admin Menu Exploit - [Not an Admin]")
+  end
+  for _, vehicle in pairs(GetAllVehicles()) do
+    DeleteEntity(vehicle)
+  end
+end)
+
+-- Event: requestModelDeletion
+RegisterNetEvent("wx_anticheat:requestModelDeletion")
+AddEventHandler("wx_anticheat:requestModelDeletion", function(model)
+  if not wx.AdminStatus(source) then
+    return BanPlayer(source, "Admin Menu Exploit - [Not an Admin]")
+  end
+  TriggerClientEvent("wx_anticheat:syncObjectDeletion", -1, model)
+end)
+
+-- Event: banPlayer
+RegisterNetEvent("wx_anticheat:banPlayer")
+AddEventHandler("wx_anticheat:banPlayer", function(playerId, reason)
+  if not wx.AdminStatus(source) then
+    return BanPlayer(source, "Admin Menu Exploit - [Not an Admin]")
+  end
+  BanPlayer(playerId, reason)
+end)
+
+-- Event: requestPlayerScreenshot
+RegisterNetEvent("wx_anticheat:requestPlayerScreenshot")
+AddEventHandler("wx_anticheat:requestPlayerScreenshot", function(playerId)
+  if not wx.AdminStatus(source) then
+    return BanPlayer(source, "Admin Menu Exploit - [Not an Admin]")
+  end
+  TriggerClientEvent("wx_anticheat:screenshotPlayer", playerId)
+end)
+
+-- Event: syncScreenshot
+RegisterNetEvent("wx_anticheat:syncScreenshot")
+AddEventHandler("wx_anticheat:syncScreenshot", function(data)
+  TriggerClientEvent("wx_anticheat:syncScreenshot", -1, data)
+end)
+
+-- Event: deletePeds
+RegisterNetEvent("wx_anticheat:deletePeds")
+AddEventHandler("wx_anticheat:deletePeds", function()
+  if not wx.AdminStatus(source) then
+    return BanPlayer(source, "Admin Menu Exploit - [Not an Admin]")
+  end
+  for _, ped in pairs(GetAllPeds()) do
+    DeleteEntity(ped)
+  end
+end)
+
+-- Event: deleteObjects
+RegisterNetEvent("wx_anticheat:deleteObjects")
+AddEventHandler("wx_anticheat:deleteObjects", function()
+  if not wx.AdminStatus(source) then
+    return BanPlayer(source, "Admin Menu Exploit - [Not an Admin]")
+  end
+  for _, obj in pairs(GetAllObjects()) do
+    DeleteEntity(obj)
+  end
+end)
+
+-- Event: deleteAll
+RegisterNetEvent("wx_anticheat:deleteAll")
+AddEventHandler("wx_anticheat:deleteAll", function()
+  if not wx.AdminStatus(source) then
+    return BanPlayer(source, "Admin Menu Exploit - [Not an Admin]")
+  end
+  for _, obj in pairs(GetAllObjects()) do
+    DeleteEntity(obj)
+  end
+  for _, ped in pairs(GetAllPeds()) do
+    DeleteEntity(ped)
+  end
+  for _, vehicle in pairs(GetAllVehicles()) do
+    DeleteEntity(vehicle)
+  end
+end)
+
+-- Event: unban
+RegisterNetEvent("wx_anticheat:unban")
+AddEventHandler("wx_anticheat:unban", function(banID)
+  local src = source
+  if not wx.AdminStatus(src) then
+    return BanPlayer(src, "Admin Menu Exploit - [Not an Admin]")
+  end
+
+  local adminName = GetPlayerName(src) or "Unknown (Console or RCON)"
+  local banIDStr = tostring(banID)
+
+  local banData = MySQL.rawExecute.await("SELECT `playerName`, `reason` FROM `wx_anticheat` WHERE `banID` = ?", {banIDStr})
+
+  if banData and banData[1] then
+    local banInfo = banData[1]
+    SendLog(
+      string.format("📝 Player has been unbanned - [%s]", banIDStr),
+      {
+        fields = {
+          { name = "Player Name", value = banInfo.playerName, inline = true },
+          { name = "Admin", value = adminName, inline = true },
+          { name = "Ban Reason", value = banInfo.reason, inline = true }
+        }
+      },
+      Webhooks.AdminMenuLogs
+    )
+    TriggerEvent("wx_anticheat:playerUnbanned", banIDStr)
+    CachedUnban(banIDStr)
+    BetterPrint(string.format("Player ^3%s^7 - [^3%s^7] has been unbanned by %s!", banInfo.playerName, banIDStr, adminName), "success")
+  else
+    BetterPrint("Couldn't find the specified Ban ID. (Example: wx unban ALJJ-A64V)", "error")
+  end
+
+  local deleteResult = MySQL.rawExecute.await("DELETE FROM `wx_anticheat` WHERE `banID` = ?", {banIDStr})
+  if not deleteResult then
+    BetterPrint("Couldn't find the specified Ban ID. (Example: wx unban ALJJ-A64V)", "error")
+  end
+end)
+
+-- Event: requestConfig
+RegisterNetEvent("wx_anticheat:requestConfig")
+AddEventHandler("wx_anticheat:requestConfig", function()
+  local configData = LoadResourceFile(GetCurrentResourceName(), "configs/anticheat_config.lua")
+  TriggerClientEvent("wx_anticheat:getConfig", source, configData)
+end)

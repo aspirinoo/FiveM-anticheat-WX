@@ -1,0 +1,9 @@
+{
+    "projectName": "WX Development Server",
+    "hostname": "[ESX] WX Development Server",
+    "anticheatVersion": "3.99",
+    "anticheatName": "wx_anticheat",
+    "maxPlayers": "10",
+    "gameBuild": "3258",
+    "projectDescription": "🛒 0wx.tebex.io 🛡️ Development server with minimum amount of resources"
+}

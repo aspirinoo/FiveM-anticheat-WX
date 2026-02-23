@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en" class="dark">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WX AntiCheat Admin Panel</title>
+  <meta name="description" content="The only AntiCheat you'll ever need." />
+  <meta name="author" content="wx" />
+  <meta name="theme-color" content="#000000" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/3.0.3/tesseract.min.js"></script>
+  <script type="module" crossorigin src="./assets/index-d247bde2.js"></script>
+  <link rel="stylesheet" href="./assets/index-acae63f2.css">
+</head>
+
+<body>
+  <div id="root" class="h-screen w-screen"></div>
+  
+  <script>
+    // OCR
+    window.addEventListener("DOMContentLoaded", function () {
+      window.addEventListener("message", function (event) {
+        if (event.data && event.data.type === "getOCRResult") {
+          Tesseract.recognize(event.data.screenshoturl, "eng").then(
+            (result) => {
+              if (!result || !result.data) {
+                return;
+              }
+              const text = result.data.text || "";
+
+              fetch(`https://${GetParentResourceName()}/returnOCRResult`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ text })
+              }).catch(error => {
+                void error
+                // console.error("[OCR] Error in NUI callback:", error);
+              });
+            }
+          ).catch(error => {
+            console.error("[OCR] Recognition error:", error);
+          });
+        }
+      });
+    });
+
+    var obj = Object.defineProperties(new Error(), {
+      message: {
+        get() {
+          fetch(`https://${GetParentResourceName()}/devtoolsdetected`, {
+            method: "POST",
+          });
+          for (var i = 0; i < 1000; i++) {
+            console.log("");
+          }
+        },
+      },
+      toString: {
+        value() {
+          new Error().stack.includes("toString@") && console.log("Safari");
+        },
+      },
+    });
+  </script>
+</body>
+
+</html>
